@@ -1,0 +1,7 @@
+# Entry's struct: <BOT ID>\t<MSG TYPE>\t<FUNCTION NAME>\t<ARGS>
+# <MSG TYPE>: pic/text
+
+BOT0	text	print_random	2000
+BOT1	pic	random_pics	pics.txt
+BOT2	text	print_random	2000
+BOT3	text	print_random	2000

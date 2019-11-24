@@ -1,0 +1,6 @@
+# <BOT NAME> <GROUP ID> <ACCESS_KEY>
+
+BOT0 188...... fe14c....6669b
+BOT1 189...... 1712v....9aa5b
+BOT2 189...... 0694c....7045a
+BOT3 189...... ab7d3....f1673
