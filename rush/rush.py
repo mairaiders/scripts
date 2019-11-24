@@ -180,7 +180,8 @@ def spam(bots, acts):
 	msgs_sent = 0
 	done = False
 	while not done:
-		for i, j in zip(bots, acts):
+		for j in acts:
+			i = next((x for x in bots if x['name'] == j['name']), None)
 			msg = j['function'](*j['args'])
 			req = i['api'].messages.send
 			if j['msg_type'] == 'text':
