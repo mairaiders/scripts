@@ -136,7 +136,7 @@ def wait_for_invites(bots):
 	return [i for i in bots if 'peer_id' in i]
 
 		
-def intersection(acts, keys, item):
+def intersection(acts, keys, item, quiet=False):
 	acts_names = set((i[item] for i in acts))
 	keys_names = set((i[item] for i in keys))
 	inter = acts_names & keys_names
@@ -144,12 +144,14 @@ def intersection(acts, keys, item):
 	for i in acts:
 		if not i[item] in inter:
 			acts.remove(i)
-			print (C('{} has no access key, it will be removed'.format(i[item]), 'red', attrs=['bold']))
+			if not quiet:
+				print (C('{} has no access key, it will be removed'.format(i[item]), 'red', attrs=['bold']))
 			
 	for i in keys:
 		if not i[item] in inter:
 			keys.remove(i)
-			print (C('{} has no action, it will be removed'.format(i[item]), 'red', attrs=['bold']))
+			if not quiet:
+				print (C('{} has no action, it will be removed'.format(i[item]), 'red', attrs=['bold']))
 
 def save_peer_ids(bots, filename):
 	peer_ids = [{'name': i['name'], 'peer_id': i['peer_id']} for i in bots]
@@ -223,7 +225,7 @@ def main():
 		bots = wait_for_invites(bots)		
 		save_peer_ids(bots, PEER_IDS_FILE)
 			
-	intersection(bots, acts, 'name')	
+	intersection(bots, acts, 'name', quiet=True)	
 	spam(bots, acts)	
 	
 if __name__ == '__main__':
