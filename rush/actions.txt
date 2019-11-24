@@ -2,6 +2,6 @@
 # <MSG TYPE>: pic/text
 
 BOT0	text	print_random	2000
-BOT1	pic	random_pics	pics.txt
+BOT1	attachment	random_pics	pics.txt
 BOT2	text	print_random	2000
 BOT3	text	print_random	2000

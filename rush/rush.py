@@ -114,9 +114,9 @@ def wait_for_invites(bots):
 	cmd = ''
 	while cmd != 'done':
 		cmd = input(C('done', 'cyan', attrs=['bold']) + \
-					C('/', 'white', attrs=['bold']) + \
-					C('status', 'cyan', attrs=['bold']) + \
-					C('> ', 'white', attrs=['bold']))
+			C('/', 'white', attrs=['bold']) + \
+			C('status', 'cyan', attrs=['bold']) + \
+			C('> ', 'white', attrs=['bold']))
 		if cmd == 'status':
 			status()			
 			
@@ -183,7 +183,7 @@ def spam(bots, acts):
 			req = i['api'].messages.send
 			if j['msg_type'] == 'text':
 				req(peer_id=i['peer_id'], random_id=rnd+1, message=msg)			
-			elif j['msg_type'] == 'pic':
+			elif j['msg_type'] == 'attachment':
 				req(peer_id=i['peer_id'], random_id=rnd+2, attachment=msg)		
 			msgs_sent += 1
 			print(C('{} prints: '.format(i['name']), 'yellow', attrs=['bold']) + '{}'.format(msg))
@@ -209,17 +209,16 @@ def main():
 	intersection(acts, keys, 'name')
 	
 	bots = get_vk_bots_from_access_keys(keys)
-	ans = input('{} exists, load peer_ids from file? (Y/p/n) '.format(PEER_IDS_FILE))
+	wait = True
 	
-	wait = False
-	if os.path.isfile(PEER_IDS_FILE) and ans in 'Yy':
-		bots = connect_peer_ids_with_bots(bots, load_peer_ids(PEER_IDS_FILE))	
-	elif ans in 'Pp':
-		bots = connect_peer_ids_with_bots(bots, load_peer_ids(PEER_IDS_FILE), 'partial')
-		wait = True
-	else:
-		wait = True
-	
+	if os.path.isfile(PEER_IDS_FILE):
+		ans = input('{} exists, load peer_ids from file? (Y/p/n) '.format(PEER_IDS_FILE))	
+		if ans in 'Yy':
+			bots = connect_peer_ids_with_bots(bots, load_peer_ids(PEER_IDS_FILE))	
+			wait = False
+		elif ans in 'Pp':
+			bots = connect_peer_ids_with_bots(bots, load_peer_ids(PEER_IDS_FILE), 'partial')
+						
 	if wait:
 		bots = wait_for_invites(bots)		
 		save_peer_ids(bots, PEER_IDS_FILE)
