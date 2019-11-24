@@ -1,1 +1,2 @@
 # scripts
+  - rush.py
