@@ -3,37 +3,18 @@ import vk, time, json, pickle, os.path, sys, signal
 import urllib.request as urlreq
 from threading import Thread
 from termcolor import colored as C
-from random import randint as rand
+
+# Importing user functions
+import functions
 
 ACCESS_KEYS_FILE='access_keys.txt'
 ACTIONS_FILE='actions.txt'
 PEER_IDS_FILE = 'peer_ids.dat'
-MAX_CYCLES = 100 # 100 or 500
+MAX_CYCLES = 100000 # 100 or 500
 API_VERSION='5.103'
-DELAY=1
+DELAY=0.5
 LONGPOLLWAIT=10
 COMMENT = "#"
-
-import base64
-def print_random(n):
-	return base64.b64encode(os.urandom(int(n)))
-
-def print_line(line):
-	return line
-	
-def random_pics(filename):
-	def file_len(file):
-		for i, j in enumerate(file):
-			pass
-		file.seek(0)
-		return i
-	
-	with open(filename, "r") as f:
-		randomline = rand(0, file_len(f))
-		for i, j in enumerate(f):
-			if i == randomline:
-				return j.strip()
-	return 0
 
 def parse_access_keys(file):    
 	access_keys = []
@@ -64,7 +45,7 @@ def parse_actions(file):
 			actions.append({ \
 				'name': splitted[0], \
 				'msg_type': splitted[1], \
-				'function': globals()[splitted[2]], \
+				'function': functions.__dict__[splitted[2]], \
 				'args': splitted[3:] if len(splitted) > 3 else [], \
 				})
 	return actions
@@ -136,22 +117,13 @@ def wait_for_invites(bots):
 	return [i for i in bots if 'peer_id' in i]
 
 		
-def intersection(acts, keys, item, quiet=False):
-	acts_names = set((i[item] for i in acts))
-	keys_names = set((i[item] for i in keys))
-	inter = acts_names & keys_names
+def intersection(l1, l2, item):
+	l1_names = set((i[item] for i in l1))
+	l2_names = set((i[item] for i in l2))
+	inter = l1_names & l2_names
 	
-	for i in acts:
-		if not i[item] in inter:
-			acts.remove(i)
-			if not quiet:
-				print (C('{} has no access key, it will be removed'.format(i[item]), 'red', attrs=['bold']))
-			
-	for i in keys:
-		if not i[item] in inter:
-			keys.remove(i)
-			if not quiet:
-				print (C('{} has no action, it will be removed'.format(i[item]), 'red', attrs=['bold']))
+	l1[:] = [i for i in l1 if i[item] in inter]
+	l2[:] = [i for i in l2 if i[item] in inter]
 
 def save_peer_ids(bots, filename):
 	peer_ids = [{'name': i['name'], 'peer_id': i['peer_id']} for i in bots]
@@ -184,10 +156,13 @@ def spam(bots, acts):
 			i = next((x for x in bots if x['name'] == j['name']), None)
 			msg = j['function'](*j['args'])
 			req = i['api'].messages.send
-			if j['msg_type'] == 'text':
-				req(peer_id=i['peer_id'], random_id=rnd+1, message=msg)			
-			elif j['msg_type'] == 'attachment':
-				req(peer_id=i['peer_id'], random_id=rnd+2, attachment=msg)		
+			try:
+				if j['msg_type'] == 'text':
+					req(peer_id=i['peer_id'], random_id=rnd+1, message=msg)			
+				elif j['msg_type'] == 'attachment':
+					req(peer_id=i['peer_id'], random_id=rnd+2, attachment=msg)		
+			except vk.exceptions.VkAPIError as e:
+				continue
 			msgs_sent += 1
 			print(C('{} prints: '.format(i['name']), 'yellow', attrs=['bold']) + '{}'.format(msg))
 			rnd ^= 1
@@ -226,7 +201,7 @@ def main():
 		bots = wait_for_invites(bots)		
 		save_peer_ids(bots, PEER_IDS_FILE)
 			
-	intersection(bots, acts, 'name', quiet=True)	
+	intersection(bots, acts, 'name')	
 	spam(bots, acts)	
 	
 if __name__ == '__main__':
