@@ -7,7 +7,7 @@ def print_random(n):
 def print_line(line):
 	return line
 	
-def random_pics(filename):
+def random_attach(filename):
 	def file_len(file):
 		for i, j in enumerate(file):
 			pass
