@@ -17,6 +17,8 @@ DELAY=0.7
 LONGPOLLWAIT=10
 COMMENT="#"
 
+peer_ids = {}
+
 def parse_access_keys(file):    
 	access_keys = []
 	with open(file, "r") as f:
@@ -54,6 +56,18 @@ def parse_actions(file):
 # Global variable needed for stop threads
 done = False
 def wait_for_invite(bot, spam=False, act=None):	
+	def sending_loop():
+		while True:
+			perform(bot, act)
+			time.sleep(DELAY)
+	if spam and not act:
+		print(C('Act doesn\'t exist for {}'.format(bot['name']), 'red', attr=['bold']))			
+		return
+		
+	if spam and act and 'peer_id' in bot:
+		sending_loop()
+		
+	global peer_ids
 	print('  {} wait for invite'.format(bot['name']))
 	lps = bot['api'].groups.getLongPollServer(group_id=bot['group_id'])
 	while not done:	
@@ -70,10 +84,10 @@ def wait_for_invite(bot, spam=False, act=None):
 			i['object']['message']['action']['type'] == 'chat_invite_user' and \
 			i['object']['message']['action']['member_id'] == -bot['group_id']:
 				bot['peer_id'] = i['object']['message']['peer_id']
+				peer_ids[bot['name']] = bot['peer_id']			
+				save_peer_ids(PEER_IDS_FILE)	
 				if spam and act:
-					while True:
-						perform(bot, act)
-						time.sleep(DELAY)
+					sending_loop()
 				return
 				
 def wait_for_invites(bots):
@@ -129,26 +143,28 @@ def intersection(l1, l2, item):
 	l1[:] = [i for i in l1 if i[item] in inter]
 	l2[:] = [i for i in l2 if i[item] in inter]
 
-def save_peer_ids(bots, filename):
-	peer_ids = [{'name': i['name'], 'peer_id': i['peer_id']} for i in bots]
+def save_peer_ids(filename):
+	global peer_ids
 	with open(filename, 'wb') as f:
 		pickle.dump(peer_ids, f)
 		
 def load_peer_ids(filename):
+	global peer_ids
 	with open(filename, 'rb') as f:
-		return pickle.load(f)
+		peer_ids = pickle.load(f)
 
-def connect_peer_ids_with_bots(bots, peer_ids, option='remove'):
+def connect_peer_ids_with_bots(bots, option='remove'):
+	global peer_ids
 	for i in bots:
-		peer_id = next((j['peer_id'] for j in peer_ids if j['name'] == i['name']), None)
+		peer_id = peer_ids.get(i['name'])
 		if not peer_id is None:
 			i['peer_id'] = peer_id
 			
 	if option == 'remove':
-		return [i for i in bots if 'peer_id' in i]
+		bots[:] = [i for i in bots if 'peer_id' in i]
 	elif option == 'partial':
-		return bots
-	
+		pass
+			
 def perform(bot, act):
 	msg = act['function'](*act['args'])
 	req = bot['api'].messages.send
@@ -170,6 +186,7 @@ def spam(bots, acts):
 		for j in acts:
 			i = next((x for x in bots if x['name'] == j['name']), None)
 			perform(i, j)
+			msgs_sent += 1
 		print(C('{} cycles left, {} messages sent'.format(MAX_CYCLES-cycles-1, msgs_sent), 'yellow', attrs=['bold']))
 		time.sleep(DELAY)
 		cycles += 1
@@ -209,28 +226,29 @@ def main():
 	
 	bots = get_vk_bots_from_access_keys(keys)
 	wait = True
-	
+		
 	if os.path.isfile(PEER_IDS_FILE):
 		ans = input('{} exists, load peer_ids from file? (Y/p/n) '.format(PEER_IDS_FILE))	
+		load_peer_ids(PEER_IDS_FILE)
 		if ans in 'Yy':
-			bots = connect_peer_ids_with_bots(bots, load_peer_ids(PEER_IDS_FILE))	
-			wait = False
+			connect_peer_ids_with_bots(bots)	
+			wait = False				
 		elif ans in 'Pp':
-			bots = connect_peer_ids_with_bots(bots, load_peer_ids(PEER_IDS_FILE), 'partial')
+			connect_peer_ids_with_bots(bots, 'partial')
 	
 	if wait and args.asynh:
 		wait_for_invites_and_spam(bots, acts)
 	elif wait:
 		bots = wait_for_invites(bots)		
-		save_peer_ids(bots, PEER_IDS_FILE)
 
 	if not args.asynh:
 		intersection(bots, acts, 'name')	
-		spam(bots, acts)	
-	
+		spam(bots, acts)
+				
 if __name__ == '__main__':
 	try:
 		main()
 	except KeyboardInterrupt:
 		print(C('Interrupted', 'red', attrs=['bold']))
+		
 		sys.exit(0)
