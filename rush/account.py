@@ -71,7 +71,7 @@ class Account(_messages):
         # TODO check for errors
         this.method('messages.addChatUser', user_id=this.user_id, chat_id=chat_id, v=this.API_VERSION)
         if type == 'text':
-            print(this.method('messages.send', chat_id=chat_id, message=msg, v=this.API_VERSION))
+            this.method('messages.send', chat_id=chat_id, message=msg, v=this.API_VERSION)
         elif type == 'attachment':
             this.method('messages.send', chat_id=chat_id, attachment=msg, v=this.API_VERSION)        
         this.method('messages.removeChatUser', user_id=this.user_id, chat_id=chat_id, v=this.API_VERSION)
