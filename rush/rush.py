@@ -1,254 +1,273 @@
 #!/usr/bin/env python
-import vk, time, json, pickle, os.path, sys, signal, random
+import vk, time, json, pickle, sys, signal, random, logging, shlex, os
 import urllib.request as urlreq
 import argparse
 from threading import Thread
-from termcolor import colored as C
+import account
 
 # Importing user functions
 import functions
 
-ACCESS_KEYS_FILE='access_keys.txt'
-ACTIONS_FILE='actions.txt'
-PEER_IDS_FILE='peer_ids.dat'
-MAX_CYCLES=1000 # 100 or 500
-API_VERSION='5.103'
-DELAY=0.7
-LONGPOLLWAIT=10
-COMMENT="#"
+FORMATTER = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s', '%Y/%m/%d %H:%M:%S')
+CONFIG_FILE = 'rush.conf'
+LOG_FILE = 'rush.log'
+PEER_IDS_FILE_SECTION_DELIMITER = '--------------------------\n'
+HELP_MESSAGE = \
+'''-----------------------------------------------------------------------------
+status - show status of bots
+exit - exit script
+help - print this message
+wait <name> - reset bot's peer_id and wait for new
+invite <chat id> - each inviter attempts to invite main
+accounts - show all existing accounts
+spysend <chat_id> <name> <msg_type> <msg> - send message and exit the conver.
+-----------------------------------------------------------------------------
+'''
 
-peer_ids = {}
-
-def parse_access_keys(file):    
-	access_keys = []
-	with open(file, "r") as f:
-		for i in f:
-			line = i.strip()
-			if line.startswith(COMMENT) or not line:
-				continue
-			splitted = line.split()
-			access_keys.append({'name': splitted[0], 'group_id': int(splitted[1]), 'access_key': splitted[2]})
-	return access_keys
-
-def get_vk_bots_from_access_keys(access_keys):
-	bots = []
-	for i in access_keys:		
-	    bots.append({'name': i['name'], 'group_id': i['group_id'], 'api': vk.API(vk.Session(access_token=i['access_key']), v=API_VERSION)})
-	return bots
+class Config:
+	entries = { \
+		'Accounts': ['name', 'user_id', 'role', 'login', 'password'],
+		'Bots': ['name', 'bot_id', 'msg_type', 'function', 'arg', 'access_key'],
+		'Options': ['name', 'sign', 'value'],
+		}
 	
+	
+	def __init__(self, filename):
+		self.sections = {'Bots': [], 'Accounts': [], 'Options': []}
+		
+		with open(filename) as f:
+			current_section = None
+			for i in f:
+				i = i.strip()
+				if i.startswith('#') or not i:
+					continue
+					
+				if i.startswith('[') and i.endswith(']'):
+					current_section = i[1:-1]
+				elif current_section:
+					i = shlex.split(i)
+					self.sections[current_section].append(dict(zip(self.entries[current_section], i)))
+				
+	def get(self, section, name=None):
+		if not name:
+			return self.sections[section]
+		
+		for i in self.sections[section]:
+			if i['name'] == name:
+				return i['value'] if section == 'Options' else i
 
-def parse_actions(file):
-	actions = []
-	with open(file, "r") as f:
-		for i in f:
-			line = i.strip()
-			if line.startswith(COMMENT) or not line:
-				continue
-			splitted = line.split("\t")
-			actions.append({ \
-				'name': splitted[0], \
-				'msg_type': splitted[1], \
-				'function': functions.__dict__[splitted[2]], \
-				'args': splitted[3:] if len(splitted) > 3 else [], \
-				})
-	return actions
+class Bot(Thread):		
+	def __init__(self, name, bot_id, msg_type, func, arg, key, *, \
+		peer_id=None, logfile=None, delay=1, api_version='5.103',  \
+		long_poll_wait=25, to_save_peer_ids=None):
+		super().__init__(daemon=True)
+		self.handler = logging.FileHandler(logfile, mode='a') if logfile else logging.StreamHandler()
+		self.handler.setFormatter(FORMATTER)
+		self.log = logging.getLogger(name)		
+		self.log.setLevel(logging.INFO)
+		self.log.addHandler(self.handler)
+		
+		self.name = name	
+		self.bot_id = int(bot_id)
+		self.api = vk.API(vk.Session(access_token=key), v=api_version)
+		self.peer_id = peer_id
+	
+		self.func = func
+		self.arg = arg
+		self.msg_type = msg_type
+	
+		self.sent = 0
+		self.delay = float(delay)
+		self.long_poll_wait = long_poll_wait
+		self.to_save_peer_ids = to_save_peer_ids
+		self.force_command = None
+		
+		# Handle by logger
+		self._error = 'no errors'
+		self._state = 'inactive'
+		
+	def act(self):
+		if self.force_command:		
+			self.error = 'no errors'
+			self.force_command()
+			return
+			
+		msg = functions.__dict__[self.func](self.arg)
+		req = self.api.messages.send
+		rand = random.getrandbits(64)
+		try:
+			if self.msg_type == 'text':
+				req(peer_id=self.peer_id, random_id=rand, message=msg)			
+			elif self.msg_type == 'attachment':
+				req(peer_id=self.peer_id, random_id=rand, attachment=msg)		
+		except vk.exceptions.VkAPIError as error:
+			self.error = error
+			return
+		self.sent += 1
+		self.error = 'no errors'
+		self.log.info('{} prints: {}'.format(self.name, msg))
 
-# Global variable needed for stop threads
-done = False
-def wait_for_invite(bot, spam=False, act=None):	
-	def sending_loop():
+	def sending(self):
+		self.state = 'sending messages'
 		while True:
-			perform(bot, act)
-			time.sleep(DELAY)
-	if spam and not act:
-		print(C('Act doesn\'t exist for {}'.format(bot['name']), 'red', attr=['bold']))			
-		return
+			self.act()
+			time.sleep(self.delay)
+				
+	def wait_for_invite(self, lps=None):
+		if not lps:
+			lps = self.api.groups.getLongPollServer(group_id=self.bot_id)
 		
-	if spam and act and 'peer_id' in bot:
-		sending_loop()
-		
-	global peer_ids
-	print('  {} wait for invite'.format(bot['name']))
-	lps = bot['api'].groups.getLongPollServer(group_id=bot['group_id'])
-	while not done:	
-		request = "{}?act=a_check&key={}&ts={}&wait={}".format(lps['server'], lps['key'], lps['ts'], LONGPOLLWAIT)
+		self.state = 'wait for invite'
+		request = "{}?act=a_check&key={}&ts={}&wait={}".format(lps['server'], lps['key'], lps['ts'], self.long_poll_wait)
 		
 		resp = json.loads(urlreq.urlopen(request).read())
-		if done: return			
-		
 		lps['ts'], updates = resp['ts'], resp['updates']
 
 		for i in updates:
-			if i['type'] == 'message_new' and \
-			'action' in i['object']['message'] and \
+			if i['type'] == 'message_new' and 'action' in i['object']['message'] and \
 			i['object']['message']['action']['type'] == 'chat_invite_user' and \
-			i['object']['message']['action']['member_id'] == -bot['group_id']:
-				bot['peer_id'] = i['object']['message']['peer_id']
-				peer_ids[bot['name']] = bot['peer_id']			
-				save_peer_ids(PEER_IDS_FILE)	
-				if spam and act:
-					sending_loop()
+			i['object']['message']['action']['member_id'] == -self.bot_id:
+				self.peer_id = i['object']['message']['peer_id']
+				if self.to_save_peer_ids:
+					with open(self.to_save_peer_ids, 'a') as f:
+						f.write('{} {}\n'.format(self.name, self.peer_id))
+				self.log.info('The wait for {} completed, peer_id set to {}'.format(self.name, self.peer_id))				
 				return
-				
-def wait_for_invites(bots):
-	def status():
-		for i in bots:
-			if not 'peer_id' in i:
-				print(C('  {} did not joined the convesation'.format(i['name']), 'red', attrs=['bold']))
-			else:
-				print(C('  {} joined the convesation'.format(i['name']), 'green', attrs=['bold']))
+		if self.peer_id == None:
+			self.wait_for_invite(lps)
+	
+	def run(self):
+		self.log.info('Thread for {} running'.format(self.name))
+		if self.peer_id:
+			self.sending()
+		self.wait_for_invite()
+		self.sending()
+	
+	def status(self):
+		return '{}: {}, messages sent: {}, error: {}'.format(self.name, self.state, self.sent, self.error)
+            
+	@property
+	def state(self):
+		return self._state
+	
+	@state.setter
+	def state(self, value):
+		if self._state == value:
+			return
+		self._state = value
+		self.log.info('State of {} switched to "{}"'.format(self.name, self._state))
+		
+	@property
+	def error(self):
+		return self._error
+		
+	@error.setter
+	def error(self, value):
+		self._error = value
+		if self._error != 'no errors':
+			self.log.error('Error occured in {}: {}'.format(self.name, self._error))
 
-	threads = []
-	global done 
-	done = False
-	
-	print(C('Waiting for invites...', 'yellow', attrs=['bold']))	
-	for i in bots:
-		thread = Thread(target=wait_for_invite, args=(i,), name=i['name'])
-		thread.start()
-		threads.append(thread)
-	
-	# So that the threads have time to print
-	time.sleep(0.1)
-	
-	cmd = ''
-	while cmd != 'done':
-		cmd = input(C('done', 'cyan', attrs=['bold']) + \
-			C('/', 'white', attrs=['bold']) + \
-			C('status', 'cyan', attrs=['bold']) + \
-			C('> ', 'white', attrs=['bold']))
-		if cmd == 'status':
-			status()			
-			
-	done = True
-	
-	print(C('Closing waiting threads...', 'yellow', attrs=['bold']))
-	for i in threads:
-		i.join()
-		print('  {} waiting cancelled'.format(i.getName()))
-	status()
-	
-	input(	C('All threads has been closed, press enter to continue', 'cyan', attrs=['bold']) + \
-			C('> ', 'white', attrs=['bold']))
+def main():
+	def peer_ids_load(peer_ids, peer_ids_file):
+		with open(peer_ids_file, 'r+') as f:
+			sections = [0]
+			last = line = f.readline()			
+			while line:
+				if line == PEER_IDS_FILE_SECTION_DELIMITER:					
+					sections.append(f.tell())
+				last = line
+				line = f.readline()
 					
-	print(C('Bots are ready to spam', 'yellow', attrs=['bold']))
-	
-	return [i for i in bots if 'peer_id' in i]
-		
-def intersection(l1, l2, item):
-	l1_names = set((i[item] for i in l1))
-	l2_names = set((i[item] for i in l2))
-	inter = l1_names & l2_names
-	
-	l1[:] = [i for i in l1 if i[item] in inter]
-	l2[:] = [i for i in l2 if i[item] in inter]
+			count = 1
+			while peer_ids == {} and count <= len(sections):
+				f.seek(sections[-count])
+				i = f.readline()
+				while i and i != PEER_IDS_FILE_SECTION_DELIMITER:
+					i = i.split()
+					peer_ids[i[0]] = int(i[1])
+					i = f.readline()
+				count += 1
+			if last != PEER_IDS_FILE_SECTION_DELIMITER:
+				f.write(PEER_IDS_FILE_SECTION_DELIMITER)
 
-def save_peer_ids(filename):
-	global peer_ids
-	with open(filename, 'wb') as f:
-		pickle.dump(peer_ids, f)
-		
-def load_peer_ids(filename):
-	global peer_ids
-	with open(filename, 'rb') as f:
-		peer_ids = pickle.load(f)
-
-def connect_peer_ids_with_bots(bots, option='remove'):
-	global peer_ids
-	for i in bots:
-		peer_id = peer_ids.get(i['name'])
-		if not peer_id is None:
-			i['peer_id'] = peer_id
-			
-	if option == 'remove':
-		bots[:] = [i for i in bots if 'peer_id' in i]
-	elif option == 'partial':
-		pass
-			
-def perform(bot, act):
-	msg = act['function'](*act['args'])
-	req = bot['api'].messages.send
-	rand = random.getrandbits(64)
-	try:
-		if act['msg_type'] == 'text':
-			req(peer_id=bot['peer_id'], random_id=rand, message=msg)			
-		elif act['msg_type'] == 'attachment':
-			req(peer_id=bot['peer_id'], random_id=rand, attachment=msg)		
-	except vk.exceptions.VkAPIError as e:
-		print(C(e, 'red', attrs=['bold']))
-		return
-	print(C('{} prints: '.format(bot['name']), 'yellow', attrs=['bold']) + '{}'.format(msg))
-	
-def spam(bots, acts):
-	cycles = 0
-	msgs_sent = 0
-	while True:
-		for j in acts:
-			i = next((x for x in bots if x['name'] == j['name']), None)
-			perform(i, j)
-			msgs_sent += 1
-		print(C('{} cycles left, {} messages sent'.format(MAX_CYCLES-cycles-1, msgs_sent), 'yellow', attrs=['bold']))
-		time.sleep(DELAY)
-		cycles += 1
-		if cycles == MAX_CYCLES:
-			ans = input('Again? (Y/n) ')
-			if ans in 'Yy':
-				cycles = 0
-			else:
-				return
-	
-def wait_for_invites_and_spam(bots, acts):
-	print(C('Waiting for invites...', 'yellow', attrs=['bold']))	
-	for i in bots:	
-		act = next((x for x in acts if x['name'] == i['name']), None)
-		thread = Thread(target=wait_for_invite, args=(i, True, act))
-		thread.start()
-
-def main():	
-	global PEER_IDS_FILE
-	
 	parser = argparse.ArgumentParser(epilog='Written by mairaiders <raidconversations@gmail.com>')
-	parser.add_argument('-a', '--asynh', action='store_true', help='send messages immediately after invitation')
-	parser.add_argument('-V', '--version', action='version', version='rush.py 0.3')
-	parser.add_argument('-f', '--file', default=PEER_IDS_FILE, dest='file', help='set file contains peer ids')
-	
+	parser.add_argument('-c', '--config', default=CONFIG_FILE, dest='config', help='set config file')
+	parser.add_argument('-V', '--version', action='version', version='rush.py 0.5')
 	args = parser.parse_args()
 	
-	PEER_IDS_FILE = args.file
-	print(C('Loading access keys...', 'yellow', attrs=['bold']))
-	keys = parse_access_keys(ACCESS_KEYS_FILE)
+	conf = Config(CONFIG_FILE)	
+	bots = []
+	peer_ids = {}
+	peer_ids_file = conf.get('Options', 'peer_ids_file')
 	
-	print(C('Loading actions...', 'yellow', attrs=['bold']))
-	acts = parse_actions(ACTIONS_FILE)
+	if os.path.isfile(peer_ids_file):
+		ans = input('{} exists, read peer ids from it? [Y/n] '.format(peer_ids_file))
+		if ans in 'Yy' and len(ans) == 1:
+			peer_ids_load(peer_ids, peer_ids_file)
+			for i, j in peer_ids.items():	
+				print('Found peer_id {} for {}'.format(j, i))
+			ans = input('Apply? [Y/n] ')
+			if ans not in 'Yy' and len(ans) == 1:
+				peer_ids = {}
+						
+	for i in conf.get('Bots'):
+		bots.append(Bot(*i.values(), logfile=LOG_FILE, \
+			peer_id=peer_ids.get(i['name']), \
+			delay=conf.get('Options', 'delay'), \
+			api_version=conf.get('Options', 'api_version'), \
+			long_poll_wait=conf.get('Options', 'long_poll_wait'), \
+			to_save_peer_ids=conf.get('Options', 'peer_ids_file')))
+		bots[-1].start()
 	
-	# If one have only either action or access key	
-	intersection(acts, keys, 'name')
-	
-	bots = get_vk_bots_from_access_keys(keys)
-	wait = True
+	accounts = []
+	inviters, mains = [], []
+	for i in conf.get('Accounts'):
+		if i['role'] == 'Inviter':
+			cur = inviters
+		elif i['role'] == 'Main':
+			cur = mains
+		accounts.append(account.Account(i['login'], i['password'], i['user_id']))
+		cur.append(accounts[-1])
 		
-	if os.path.isfile(PEER_IDS_FILE):
-		ans = input('{} exists, load peer_ids from file? (Y/p/n) '.format(PEER_IDS_FILE))	
-		load_peer_ids(PEER_IDS_FILE)
-		if ans in 'Yy':
-			connect_peer_ids_with_bots(bots)	
-			wait = False				
-		elif ans in 'Pp':
-			connect_peer_ids_with_bots(bots, 'partial')
-	
-	if wait and args.asynh:
-		wait_for_invites_and_spam(bots, acts)
-	elif wait:
-		bots = wait_for_invites(bots)		
-
-	if not args.asynh:
-		intersection(bots, acts, 'name')	
-		spam(bots, acts)
-				
+	cmd = None
+	while True:
+		cmd = input('help/command> ')		
+		cmd = shlex.split(cmd)
+		cmd, args = cmd[0], cmd[1:]
+		try:	
+			if cmd == 'status':
+				for i in bots:
+		 			print(i.status())		
+			elif cmd =='help':
+				print(HELP_MESSAGE, end='')	
+			elif cmd == 'wait':
+				for i in bots:
+					if i.name in args:
+						i.force_command = i.wait_for_invite
+			elif cmd == 'exit':
+				sys.exit(0)
+			elif cmd == 'invite':
+				for i in inviters:
+					i.invite(mains[0].user_id, args[0])
+			elif cmd == 'accounts':
+				for i in conf.get('Accounts'):
+					print('{} (https://vk.com/id{}): {}'.format(i['name'], i['user_id'], i['role']))
+			elif cmd == 'spysend':
+				_ = [i['user_id'] for i in conf.get('Accounts') if i['name'] == args[1]]
+				if len(_) == 0:
+					print('User doesn\'t exist')
+					continue
+				id = _[0]
+				for i in accounts:
+					if i.user_id == id:
+						i.spy_send(args[0], args[2], args[3])
+			else:
+				print('{}: command not found'.format(cmd))
+		except IndexError:
+			print('Invalid arguments')
+		
 if __name__ == '__main__':
 	try:
 		main()
 	except KeyboardInterrupt:
-		print(C('Interrupted', 'red', attrs=['bold']))
-		
-		sys.exit(0)
+		print('Interrupted', file=sys.stderr)

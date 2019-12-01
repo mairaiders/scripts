@@ -8,14 +8,13 @@ def print_line(line):
 	return line
 	
 def random_attach(filename):
-	def file_len(file):
-		for i, j in enumerate(file):
-			pass
-		file.seek(0)
-		return i
-	
-	with open(filename, "r") as f:
-		randomline = rand(0, file_len(f))
+	with open(filename) as f:
+		linelen = len(f.readline())
+		
+	with open(filename) as f:
+		lines = int((f.seek(0, 2))/linelen)
+		randomline = rand(0, lines - 1)
+		f.seek(0)
 		for i, j in enumerate(f):
 			if i == randomline:
 				return j.strip()

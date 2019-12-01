@@ -1,7 +1,0 @@
-# Entry's struct: <BOT ID>\t<MSG TYPE>\t<FUNCTION NAME>\t<ARGS>
-# <MSG TYPE>: attachment/text
-
-BOT0	text	print_random	2000
-BOT1	attachment	random_attach	pics.txt
-BOT2	text	print_random	2000
-BOT3	text	print_random	2000
