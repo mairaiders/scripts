@@ -3,6 +3,7 @@ import vk, time, json, pickle, sys, signal, random, logging, shlex, os
 import urllib.request as urlreq
 import argparse
 from threading import Thread
+from threading import Event
 import account
 
 # Importing user functions
@@ -21,6 +22,8 @@ wait <name> - reset bot's peer_id and wait for new
 invite <chat id> - each inviter attempts to invite main
 accounts - show all existing accounts
 spysend <chat_id> <name> <msg_type> <msg> - send message and exit the conver.
+freeze - stop sending messages
+unfreeze - start sending messages
 -----------------------------------------------------------------------------
 '''
 
@@ -81,8 +84,9 @@ class Bot(Thread):
 		self.long_poll_wait = long_poll_wait
 		self.to_save_peer_ids = to_save_peer_ids
 		self.force_command = None
-		
+
 		# Handle by logger
+		self._unfreeze = Event()
 		self._error = 'no errors'
 		self._state = 'inactive'
 		
@@ -92,6 +96,8 @@ class Bot(Thread):
 			self.force_command()
 			return
 			
+		self._unfreeze.wait()
+				
 		msg = functions.__dict__[self.func](self.arg)
 		req = self.api.messages.send
 		rand = random.getrandbits(64)
@@ -166,16 +172,27 @@ class Bot(Thread):
 		self._error = value
 		if self._error != 'no errors':
 			self.log.error('Error occured in {}: {}'.format(self.name, self._error))
-
+	@property
+	def freeze(self):
+		return not self._unfreeze.is_set()
+	
+	@freeze.setter
+	def freeze(self, value):
+		if not value: 
+			self._unfreeze.set()
+			self.log.info('{} unfroze'.format(self.name))
+		else: 
+			self._unfreeze.clear()
+			self.log.info('{} froze'.format(self.name))
+		
 def main():
 	def peer_ids_load(peer_ids, peer_ids_file):
 		with open(peer_ids_file, 'r+') as f:
 			sections = [0]
-			last = line = f.readline()			
+			line = f.readline()			
 			while line:
 				if line == PEER_IDS_FILE_SECTION_DELIMITER:					
 					sections.append(f.tell())
-				last = line
 				line = f.readline()
 					
 			count = 1
@@ -187,9 +204,6 @@ def main():
 					peer_ids[i[0]] = int(i[1])
 					i = f.readline()
 				count += 1
-			if last != PEER_IDS_FILE_SECTION_DELIMITER:
-				f.write(PEER_IDS_FILE_SECTION_DELIMITER)
-
 	parser = argparse.ArgumentParser(epilog='Written by mairaiders <raidconversations@gmail.com>')
 	parser.add_argument('-c', '--config', default=CONFIG_FILE, dest='config', help='set config file')
 	parser.add_argument('-V', '--version', action='version', version='rush.py 0.5')
@@ -200,6 +214,9 @@ def main():
 	peer_ids = {}
 	peer_ids_file = conf.get('Options', 'peer_ids_file')
 	
+	with open(peer_ids_file, 'a') as f:
+		f.write(PEER_IDS_FILE_SECTION_DELIMITER)
+
 	if os.path.isfile(peer_ids_file):
 		ans = input('{} exists, read peer ids from it? [Y/n] '.format(peer_ids_file))
 		if ans in 'Yy' and len(ans) == 1:
@@ -233,7 +250,8 @@ def main():
 	while True:
 		cmd = input('help/command> ')		
 		cmd = shlex.split(cmd)
-		cmd, args = cmd[0], cmd[1:]
+		if len(cmd) == 0: continue
+		cmd, args = cmd[0], cmd[1:] if len(cmd) > 1 else None
 		try:	
 			if cmd == 'status':
 				for i in bots:
@@ -261,6 +279,12 @@ def main():
 				for i in accounts:
 					if i.user_id == id:
 						i.spy_send(args[0], args[2], args[3])
+			elif cmd == 'freeze':
+				for i in bots:
+					i.freeze = True
+			elif cmd == 'unfreeze':
+				for i in bots:
+					i.freeze = False
 			else:
 				print('{}: command not found'.format(cmd))
 		except IndexError:
