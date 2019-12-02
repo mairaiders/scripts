@@ -16,7 +16,6 @@ import functions
 
 FORMATTER = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s', '%Y/%m/%d %H:%M:%S')
 CONFIG_FILE = 'rush.conf'
-LOG_FILE = 'rush.log'
 PEER_IDS_FILE_SECTION_DELIMITER = '--------------------------\n'
 AVAILABLE_COMMANDS = 'status, exit, help, wait, invite, accounts, send, spysend, freeze, unfreeze'
 HELP_FUNCITONS = { \
@@ -57,9 +56,9 @@ class Config:
 				
 	def get(self, section, name=None):
 		if not name:
-			return self.sections[section]
+			return self.sections.get(section)
 		
-		for i in self.sections[section]:
+		for i in self.sections.get(section):
 			if i['name'] == name:
 				return i['value'] if section == 'Options' else i
 
@@ -232,9 +231,8 @@ def main():
 			ans = input('Apply? [Y/n] ')
 			if ans not in 'Yy' and len(ans) == 1:
 				peer_ids = {}
-						
 	for i in conf.get('Bots'):
-		bots.append(Bot(*i.values(), logfile=LOG_FILE, \
+		bots.append(Bot(*i.values(), logfile=conf.get('Options', 'log_file'), \
 			peer_id=peer_ids.get(i['name']), \
 			delay=conf.get('Options', 'delay'), \
 			api_version=conf.get('Options', 'api_version'), \
