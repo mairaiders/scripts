@@ -150,7 +150,7 @@ class Bot(Thread):
 		self.sending()
 	
 	def status(self):
-		return '{}: {}, messages sent: {}, error: {}'.format(self.name, self.state, self.sent, self.error)
+		return '{}: {}, messages sent: {}, error: {} {}'.format(self.name, self.state, self.sent, self.error, '(frozen)' if not self._unfreeze.is_set() else '')
             
 	@property
 	def state(self):
