@@ -1,10 +1,15 @@
 #!/usr/bin/env python
-import vk, time, json, pickle, sys, signal, random, logging, shlex, os
-import urllib.request as urlreq
-import argparse
-from threading import Thread
-from threading import Event
+import vk, time, json, pickle, sys, signal, random, logging, shlex, os, threading
+import argparse, urllib.request as urlreq
 import account
+
+def color(msg, col):
+	return colored(msg, col, attrs=['bold'])
+try:
+	from termcolor import colored
+except ImportError:
+	print('Python module "termcolor" not found, colored mode is disabled')
+	color = lambda x, y: x
 
 # Importing user functions
 import functions
@@ -13,28 +18,27 @@ FORMATTER = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(messag
 CONFIG_FILE = 'rush.conf'
 LOG_FILE = 'rush.log'
 PEER_IDS_FILE_SECTION_DELIMITER = '--------------------------\n'
-HELP_MESSAGE = \
-'''-----------------------------------------------------------------------------
-status - show status of bots
-exit - exit script
-help - print this message
-wait <name> - reset bot's peer_id and wait for new
-invite <chat id> - each inviter attempts to invite main
-accounts - show all existing accounts
-spysend <chat_id> <name> <msg_type> <msg> - send message and exit the conver.
-freeze - stop sending messages
-unfreeze - start sending messages
------------------------------------------------------------------------------
-'''
-
+AVAILABLE_COMMANDS = 'status, exit, help, wait, invite, accounts, send, spysend, freeze, unfreeze'
+HELP_FUNCITONS = { \
+	'status': 'Show status of bots',
+	'exit': 'Exit script',
+	'help': 'help [COMMAND] ([COMMAND] - optional)\nShow available commands or brief information about COMMAND',
+	'wait': 'wait [NAMES]... ([NAMES]... - optional)\nWait for new invite for each bots or only for specified',
+	'invite': 'invite [CHAT_ID]\nEach inviter attempts to invite main into CHAT_ID',
+	'accounts': 'Show available accounts',
+	'send': 'send [CHAT_ID] [NAME] [MSG_TYPE] [MSG]\nSend [MSG] with type [MSG_TYPE] to [CHAT_ID] from account [NAME]',
+	'spysend': 'spysend [CHAT_ID] [NAME] [MSG_TYPE] [MSG]\nWorks similar to "send", but adds two more actions: comes into the conversation, sends a message, exists the conversation', 
+	'freeze': 'freeze [NAMES]..., ([NAMES]... - optional)\nStop sending messages by all bots',
+	'unfreeze': 'unfreeze [NAMES]..., ([NAMES]... - optional)\nStart sending messages by all bots',
+	}
+	
 class Config:
 	entries = { \
 		'Accounts': ['name', 'user_id', 'role', 'login', 'password'],
 		'Bots': ['name', 'bot_id', 'msg_type', 'function', 'arg', 'access_key'],
 		'Options': ['name', 'sign', 'value'],
 		}
-	
-	
+
 	def __init__(self, filename):
 		self.sections = {'Bots': [], 'Accounts': [], 'Options': []}
 		
@@ -59,7 +63,7 @@ class Config:
 			if i['name'] == name:
 				return i['value'] if section == 'Options' else i
 
-class Bot(Thread):		
+class Bot(threading.Thread):		
 	def __init__(self, name, bot_id, msg_type, func, arg, key, *, \
 		peer_id=None, logfile=None, delay=1, api_version='5.103',  \
 		long_poll_wait=25, to_save_peer_ids=None):
@@ -69,7 +73,7 @@ class Bot(Thread):
 		self.log = logging.getLogger(name)		
 		self.log.setLevel(logging.INFO)
 		self.log.addHandler(self.handler)
-		
+	
 		self.name = name	
 		self.bot_id = int(bot_id)
 		self.api = vk.API(vk.Session(access_token=key), v=api_version)
@@ -84,9 +88,9 @@ class Bot(Thread):
 		self.long_poll_wait = long_poll_wait
 		self.to_save_peer_ids = to_save_peer_ids
 		self.force_command = None
-
+		
 		# Handle by logger
-		self._unfreeze = Event()
+		self._unfreeze = threading.Event()
 		self._error = 'no errors'
 		self._state = 'inactive'
 		
@@ -143,15 +147,17 @@ class Bot(Thread):
 			self.wait_for_invite(lps)
 	
 	def run(self):
-		self.log.info('Thread for {} running'.format(self.name))
-		if self.peer_id:
+		try:
+			self.log.info('Thread for {} running'.format(self.name))
+			if self.peer_id:
+				self.sending()
+			self.wait_for_invite()
 			self.sending()
-		self.wait_for_invite()
-		self.sending()
-	
+		except Exception as error:
+			self.error = error	
 	def status(self):
-		return '{}: {}, messages sent: {}, error: {} {}'.format(self.name, self.state, self.sent, self.error, '(frozen)' if not self._unfreeze.is_set() else '')
-            
+		return '{}: {}, messages sent: {}, error: {} {}'.format(self.name, color(self.state, 'white'), self.sent, color(self.error, 'red'), '(frozen)' if not self._unfreeze.is_set() else '')
+	
 	@property
 	def state(self):
 		return self._state
@@ -236,62 +242,76 @@ def main():
 			to_save_peer_ids=conf.get('Options', 'peer_ids_file')))
 		bots[-1].start()
 	
-	accounts = []
-	inviters, mains = [], []
+	accounts = {'Inviter': [], 'Main': []}
+	
 	for i in conf.get('Accounts'):
-		if i['role'] == 'Inviter':
-			cur = inviters
-		elif i['role'] == 'Main':
-			cur = mains
-		accounts.append(account.Account(i['login'], i['password'], i['user_id']))
-		cur.append(accounts[-1])
-		
+		try:
+			accounts[i['role']].append({'name': i['name'], \
+				'account': account.Account(i['login'], i['password'], i['user_id'])})
+		except account.invalid_password:
+			print(i['name'] + ':', 'Authorization failed')			
 	cmd = None
 	while True:
-		cmd = input('help/command> ')		
+		cmd = input(color('help', 'white') + \
+			color('/', 'green') + \
+			color('command', 'white') + \
+			color('>', 'green') +  ' ')		
 		cmd = shlex.split(cmd)
 		if len(cmd) == 0: continue
-		cmd, args = cmd[0], cmd[1:] if len(cmd) > 1 else None
+		cmd, args = cmd[0], cmd[1:]
 		try:	
 			if cmd == 'status':
 				for i in bots:
 		 			print(i.status())		
 			elif cmd =='help':
-				print(HELP_MESSAGE, end='')	
+				if len(args) == 0:
+					print(AVAILABLE_COMMANDS)	
+				else:
+					print(HELP_FUNCITONS[args[0]])
 			elif cmd == 'wait':
-				for i in bots:
-					if i.name in args:
+				if len(args) == 0:
+					for i in bots:
 						i.force_command = i.wait_for_invite
+				else:
+					for i in bots:
+						if i.name in args:
+							i.force_command = i.wait_for_invite
 			elif cmd == 'exit':
 				sys.exit(0)
 			elif cmd == 'invite':
-				for i in inviters:
-					i.invite(mains[0].user_id, args[0])
+				for i in accounts['Inviter']:
+					if i.spy_invite(accounts['Main'][0]['account'].user_id, args[0]):
+						break
 			elif cmd == 'accounts':
-				for i in conf.get('Accounts'):
-					print('{} (https://vk.com/id{}): {}'.format(i['name'], i['user_id'], i['role']))
-			elif cmd == 'spysend':
-				_ = [i['user_id'] for i in conf.get('Accounts') if i['name'] == args[1]]
-				if len(_) == 0:
-					print('User doesn\'t exist')
-					continue
-				id = _[0]
-				for i in accounts:
-					if i.user_id == id:
-						i.spy_send(args[0], args[2], args[3])
-			elif cmd == 'freeze':
-				for i in bots:
-					i.freeze = True
-			elif cmd == 'unfreeze':
-				for i in bots:
-					i.freeze = False
+				for role, accs in accounts.items():
+					for i in accs:
+						print('{} (https://vk.com/id{}): {}'.format(i['name'], i['account'].user_id, role))
+			elif cmd == 'spysend' or cmd == 'send':
+				for role, accs in accounts.items():
+					for i in accs:
+						if i['name'] == args[1]:
+							method = i['account'].spy_send if cmd == 'spysend' else i['account'].send
+							method(args[0], args[2], args[3])
+			elif cmd == 'freeze' or cmd == 'unfreeze':
+				val = cmd == 'freeze'
+				if len(args) == 0:					
+					for i in bots:
+						i.freeze = val
+				else:
+					for i in bots:
+						if i.name in args:
+							i.freeze = val
 			else:
-				print('{}: command not found'.format(cmd))
+				print(color('{}: command not found'.format(cmd), 'red'))
 		except IndexError:
-			print('Invalid arguments')
+			print(color('Invalid arguments', 'red'), file=sys.stderr)
+		except Exception as error:
+			print(color('Error: ' + str(error), 'red'), file=sys.stderr)
 		
 if __name__ == '__main__':
 	try:
 		main()
 	except KeyboardInterrupt:
-		print('Interrupted', file=sys.stderr)
+		print(color('Interrupted', 'red'), file=sys.stderr)
+	except Exception as error:
+		print(color('Error: ' + str(error), 'red'), file=sys.stderr)
