@@ -278,8 +278,11 @@ def main():
 				sys.exit(0)
 			elif cmd == 'invite':
 				for i in accounts['Inviter']:
-					if i.spy_invite(accounts['Main'][0]['account'].user_id, args[0]):
-						break
+					try:
+						if i.spy_invite(accounts['Main'][0]['account'].user_id, args[0]):
+							break
+					except account.response_error as error:
+						print(color(i['name'] + ': ' + str(error), 'red')) 
 			elif cmd == 'accounts':
 				for role, accs in accounts.items():
 					for i in accs:
