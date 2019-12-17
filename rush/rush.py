@@ -70,17 +70,14 @@ class Bot(threading.Thread):
 		self.handler.setFormatter(FORMATTER)
 		self.log = logging.getLogger(name)		
 		self.log.setLevel(logging.INFO)
-		self.log.addHandler(self.handler)
-	
+		self.log.addHandler(self.handler)	
 		self.name = name	
 		self.bot_id = int(bot_id)
 		self.api = vk.API(vk.Session(access_token=key), v=api_version)
-		self.peer_id = peer_id
-	
+		self.peer_id = peer_id	
 		self.func = func
 		self.arg = arg
-		self.msg_type = msg_type
-	
+		self.msg_type = msg_type	
 		self.sent = 0
 		self.delay = float(delay)
 		self.long_poll_wait = long_poll_wait
@@ -192,7 +189,7 @@ class Bot(threading.Thread):
 # Wrap accounts with roles
 class Actors:
 	def __init__(self):
-		self.roles = {}
+		self.roles = {'Main': [], 'Inviter': []}
 		
 	def append(self, acc):
 		vkacc = account.Account(acc['login'], acc['password'], acc['user_id'])
@@ -205,7 +202,7 @@ class Actors:
 		for i in self.roles.get('Inviter'):
 			try:
 				print('{} trying to invite {} into the conversation {}'.format(i['name'], name, chat_id))
-				i.spy_invite(self._get_account(name).user_id, chat_id)
+				i['account'].spy_invite(self._get_account(name).user_id, chat_id)
 				print('{} invited successful'.format(name))
 				return
 			except (account.response_error, KeyError) as error:
@@ -227,9 +224,9 @@ class Actors:
 		
 	def __str__(self):
 		res = ''
-		for role, accs in self.roles:
+		for role, accs in self.roles.items():
 			for i in accs:
-				res += '{} (https://vk.com/id{}): {}'.format(i['name'], i['account'].user_id, role)
+				res += '{} (https://vk.com/id{}): {}\n'.format(i['name'], i['account'].user_id, role)
 		return res if res else 'No accounts authorized'
 def main():
 	def peer_ids_load(peer_ids, peer_ids_file):
@@ -321,14 +318,11 @@ def main():
 					print(AVAILABLE_COMMANDS)	
 				else:
 					print(HELP_FUNCITONS[args[0]])
-			elif cmd == 'wait':
-				if len(args) == 0:
-					for i in bots:
-						i.force_command = i.wait_for_invite
-				else:
-					for i in bots:
-						if i.name in args:
-							i.force_command = i.wait_for_invite
+			elif cmd == 'wait':			
+				select = [i for i in bots if i.name in args]
+				if not select: select = bots
+				for i in select:
+					i.freeze = i.wait_for_invite
 			elif cmd == 'exit':
 				sys.exit(0)
 			elif cmd == 'spyinvite':
@@ -339,13 +333,10 @@ def main():
 				actors.spy_send(args[0], args[1], args[2], args[3])
 			elif cmd == 'freeze' or cmd == 'unfreeze':
 				val = cmd == 'freeze'
-				if len(args) == 0:					
-					for i in bots:
-						i.freeze = val
-				else:
-					for i in bots:
-						if i.name in args:
-							i.freeze = val
+				select = [i for i in bots if i.name in args]
+				if not select: select = bots
+				for i in select:
+					i.freeze = val
 			else:
 				print(color('{}: command not found'.format(cmd), 'red'))
 		except IndexError:
